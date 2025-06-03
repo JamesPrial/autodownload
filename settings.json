@@ -1,0 +1,8 @@
+{
+    "MQTT_BROKER_HOST": "YOUR_BROKER_HERE",
+    "MQTT_TOPICS": ["$SYS/#", "torrents"],
+    "MQTT_SAVE_PATH": "/path/to/app/data/MQTT.json",
+    "MQTT_USERNAME": "YOUR_USERNAME_HERE",
+    "MQTT_PASSWORD": "YOUR_PASSWORD_HERE",
+    "DESTINATION_PATH":"/path/to/your/downloads"
+}
