@@ -4,5 +4,8 @@
     "MQTT_SAVE_PATH": "/path/to/app/data/MQTT.json",
     "MQTT_USERNAME": "YOUR_USERNAME_HERE",
     "MQTT_PASSWORD": "YOUR_PASSWORD_HERE",
-    "DESTINATION_PATH":"/path/to/your/downloads"
+    "DESTINATION_PATH":"/path/to/your/downloads",
+    "KEY_FOLDER_PATH":"/path/to/app/data/keys",
+    "SSH_USERNAME":"YOUR_USERNAME_HERE",
+    "SSH_PORT":"YOUR_SSH_PORT"
 }
