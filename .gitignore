@@ -1,6 +1,8 @@
 .*
 !.gitignore
 .*/
-.*/*
+.*/**
 */.*
 __pycache__/
+settings.json
+aliases.json
