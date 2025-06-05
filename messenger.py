@@ -2,12 +2,14 @@ import sys
 from time import sleep
 import paho.mqtt.client as mqtt
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
-import asyncio
 import os, errno
 import subprocess
 import requests
+import threading
+
+import downloader
 
 logging.basicConfig(
     level=logging.DEBUG,
@@ -46,7 +48,8 @@ class Messenger:
         self.ssh_port = settings['SSH_PORT']
         self.aliases =aliases
         self.endpoints = endpoints
-        
+        self._download_lock = threading.Lock()
+        self._write_msg_lock = threading.Lock()
         self.client.connect(settings['MQTT_BROKER_HOST'])
         
     
@@ -54,30 +57,36 @@ class Messenger:
         url = self.endpoints[target]
         headers = {'Content-Type': 'application/json'}
         data = {'key': pubkey}
+        logging.info("put_pubkey - target %s - pubkey %s" % target % pubkey)
         response = requests.put(url=url, headers=headers, data=data)
         if response.status_code == 204:
+            logging.debug("put_pubkey - 204 recieved")
             return True
-        logging.error("Did not recieve 204 status code, recieved: %d, response.text = %s" % response.status_code % response.text)
+        logging.error("put_pubkey - did not recieve 204 status code, recieved: %d - response.text = %s" % response.status_code % response.text)
         return False
     
     def delete_pubkey(self, target:str, pubkey:str):
         url = self.endpoints[target]
         headers = {'Content-Type': 'application/json'}
         data = {'key': pubkey}
+        logging.info("delete_pubkey - target %s - pubkey %s" % target % pubkey)
         response = requests.delete(url=url, headers=headers, data=data)
         if response.status_code == 204:
-            logging.info("Successfully deleted pubkey")
-        logging.error("Did not recieve 204 status code, recieved: %d, response.text = %s" % response.status_code % response.text)
+            logging.debug("delete_pubkey - 204 recieved")
+        logging.error("delete_pubkey - did not recieve 204 status code, recieved: %d - response.text = %s" % response.status_code % response.text)
     
     def keygen(self, key_name:str):
         target = f"{self.key_folder_path}/{key_name}"
+        logging.info("Keygen - generating key at: %s" % target)
         try:
             os.remove(target)
+            logging.debug("Keygen - successful removed previous key at: %s" % target)
         except OSError as e: # this would be "except OSError, e:" before Python 2.6
+            logging.debug("Keygen - failed to remove previous key (probably didnt exist)", e)
             if e.errno != errno.ENOENT: # errno.ENOENT = no such file or directory
                 raise # re-raise exception if a different error occurred
         keygen_cmd = [
-            "cd", self.key_folder_path,                                            # move to target folder...
+            "cd", self.key_folder_path,                                     # move to target folder...
             "&&",                                                           # and...
             "ssh-keygen", "-t", "rsa", "-q", "-f", key_name, "-N", r'""',   # generate key named $key_name using RSA with no password...
             "&&",                                                           # and...
@@ -87,40 +96,52 @@ class Messenger:
    
    
    
-    async def download(self, username:str, torrent_id:str, content_path:str):
+    def download(self, username:str, torrent_id:str, content_path:str):
         pubkey = self.keygen(torrent_id)
         if self.put_pubkey(username, pubkey):
             sleep(5)
-            download_cmd = [
-                "rsync", "-avz", "-e", f"ssh -p {self.ssh_port} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o IdentityFile={self.key_folder_path}/{torrent_id}",
-                    f"{self.ssh_username}@{self.aliases[username]}:/{content_path}", f"{self.download_destination_path}{content_path}"
-            ]
-            stdout = command_runner(download_cmd)
-            logging.info("rsync stdout: %s" % stdout)
+            with self._download_lock:
+                logging.debug("Download lock acquired")
+                downloader.rsync(
+                    ssh_port = self.ssh_port, identity_file = f"{self.key_folder_path}/{torrent_id}", ssh_username = self.ssh_username, 
+                    target_ip = self.aliases[username], target_path = content_path, destination_path = f"{self.download_destination_path}{content_path}"
+                )
+            logging.debug("Download lock released")
             self.delete_pubkey(username, pubkey)
     
     def on_connect(self, client, userdata, flags, reason_code, properties):
         client.subscribe(self.topics)
 
+    def message_handler(self, msg:mqtt.MQTTMessage):
+        message_dict={
+                        'topic': msg.topic,
+                        'payload': json.loads(msg.payload.decode('utf-8'))
+        }
+        
+        if(message_dict['topic'] == "torrents"):
+            logging.info("topic: %s - payload: %s" % message_dict['topic'] % message_dict['payload'])
+            payload = message_dict['payload']
+            with self._write_msg_lock:
+                logging.debug("Write msg lock acquired")
+                self.save_message(message_dict)
+            logging.debug("Write msg lock released")
+            self.download(payload['username'], payload['torrent_id'], payload['content_path'])
+        else:
+            logging.debug("topic: %s - payload: %s" % message_dict['topic'] % message_dict['payload'])
+
     def on_message(self, client, userdata, msg: mqtt.MQTTMessage):
         #userdata.append(msg.payload)
-        if(msg.topic == "torrents"):
-            logging.info(msg.payload)
-            message_dict={
-                        "topic": msg.topic,
-                        "payload": json.loads(msg.payload.decode('utf-8'))
-                    }
-            payload = message_dict['payload']
-            self.save_message(message_dict)
-            ##LOCKING NEEDS IMPLEMENTING
-            asyncio.run(self.download(payload['username'], payload['torrent_id'], payload['content_path']))
-        else:
-            logging.debug(msg.payload)
+        try:
+            threading.Thread(target=self.message_handler, args=(msg,), daemon=True).start()
+        except Exception as e:
+            logging.exception("failed to start thread: %s", e)
+        
         
     def save_message(self, message_dict):
         saveformat = {
                 str(datetime.now()):message_dict
             }
+        logging.debug("save_message - saving message")
         with open(self.message_save_path, 'a') as out:
             json.dump(saveformat, out)
             out.write('\n')
