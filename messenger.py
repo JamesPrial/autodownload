@@ -19,11 +19,12 @@ logging.basicConfig(
 )
 
 def command_runner(command: list[str]):
-    logging.info("command runner - executing: %s" % ''.join(command))
+    logging.info(f"command runner - executing: {command}")
     before = datetime.now()
     result = subprocess.run(command, capture_output=True, text=True)
-    logging.info("command runner - completed - elapsed time: %s" % str(datetime.now() - before))
-    logging.error(result.stderr)
+    logging.info(f"command runner - completed - elapsed time: {str(datetime.now() - before)}")
+    if len(result.stderr) > 0:
+        logging.error(result.stderr)
     return result.stdout
 
 class Messenger:
@@ -54,45 +55,46 @@ class Messenger:
         
     
     def put_pubkey(self, target:str, pubkey:str):
-        url = self.endpoints[target]
+        url = f"{self.endpoints[target]}/{self.ssh_username}"
         headers = {'Content-Type': 'application/json'}
-        data = {'key': pubkey}
-        logging.info("put_pubkey - target %s - pubkey %s" % target % pubkey)
+        data = json.dumps({'key': pubkey})
+        logging.info(f"put_pubkey - target {url} - pubkey {pubkey}" )
         response = requests.put(url=url, headers=headers, data=data)
         if response.status_code == 204:
             logging.debug("put_pubkey - 204 recieved")
             return True
-        logging.error("put_pubkey - did not recieve 204 status code, recieved: %d - response.text = %s" % response.status_code % response.text)
+        logging.error(f"put_pubkey - did not recieve 204 status code, recieved: {response.status_code} - response.text = {response.text}")
         return False
     
     def delete_pubkey(self, target:str, pubkey:str):
-        url = self.endpoints[target]
+        url = f"{self.endpoints[target]}/{self.ssh_username}"
         headers = {'Content-Type': 'application/json'}
-        data = {'key': pubkey}
-        logging.info("delete_pubkey - target %s - pubkey %s" % target % pubkey)
+        data = json.dumps({'key': pubkey})
+        logging.info(f"delete_pubkey - target {url} - pubkey {pubkey}")
         response = requests.delete(url=url, headers=headers, data=data)
         if response.status_code == 204:
             logging.debug("delete_pubkey - 204 recieved")
-        logging.error("delete_pubkey - did not recieve 204 status code, recieved: %d - response.text = %s" % response.status_code % response.text)
+        else:
+            logging.error(f"delete_pubkey - did not recieve 204 status code, recieved: {response.status_code} - response.text = {response.text}")
     
     def keygen(self, key_name:str):
         target = f"{self.key_folder_path}/{key_name}"
-        logging.info("Keygen - generating key at: %s" % target)
+        logging.info(f"Keygen - generating key at: {target}" )
         try:
             os.remove(target)
-            logging.debug("Keygen - successful removed previous key at: %s" % target)
+            logging.debug(f"Keygen - successful removed previous key at: {target}")
         except OSError as e: # this would be "except OSError, e:" before Python 2.6
-            logging.debug("Keygen - failed to remove previous key (probably didnt exist)", e)
+            logging.debug("Keygen - failed to remove previous key (probably didnt exist)")
             if e.errno != errno.ENOENT: # errno.ENOENT = no such file or directory
                 raise # re-raise exception if a different error occurred
         keygen_cmd = [
-            "cd", self.key_folder_path,                                     # move to target folder...
-            "&&",                                                           # and...
-            "ssh-keygen", "-t", "rsa", "-q", "-f", key_name, "-N", r'""',   # generate key named $key_name using RSA with no password...
-            "&&",                                                           # and...
-            "ssh-keygen", "-y", "-f", key_name                              # write the pubkey to stdout
+            "ssh-keygen", "-t", "rsa", "-q", "-f", target, "-N", '',     # generate key named $key_name using RSA with no password...
         ]
-        return command_runner(keygen_cmd)
+        logging.debug(f"keygen - {command_runner(keygen_cmd)}")
+        read_key_cmd = [
+            "ssh-keygen", "-y", "-f", target                              # write the pubkey to stdout
+        ]
+        return command_runner(read_key_cmd)
    
    
    
@@ -119,7 +121,7 @@ class Messenger:
         }
         
         if(message_dict['topic'] == "torrents"):
-            logging.info("topic: %s - payload: %s" % message_dict['topic'] % message_dict['payload'])
+            logging.info(f"topic: {message_dict['topic']} - payload: {message_dict['payload']}")
             payload = message_dict['payload']
             with self._write_msg_lock:
                 logging.debug("Write msg lock acquired")
@@ -127,7 +129,7 @@ class Messenger:
             logging.debug("Write msg lock released")
             self.download(payload['username'], payload['torrent_id'], payload['content_path'])
         else:
-            logging.debug("topic: %s - payload: %s" % message_dict['topic'] % message_dict['payload'])
+            logging.debug(f"topic: {message_dict['topic']} - payload: {message_dict['payload']}")
 
     def on_message(self, client, userdata, msg: mqtt.MQTTMessage):
         #userdata.append(msg.payload)
@@ -160,4 +162,4 @@ def main(settings_path, aliases_path, endpoints_path):
     messenger.listen()
         
 if __name__ == '__main__':
-    sys.exit(main("settings.json", "aliases.json", "endpoints.json"))
+    sys.exit(main("/appdata/settings.json", "/appdata/aliases.json", "/appdata/endpoints.json"))
